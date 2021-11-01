@@ -1,0 +1,144 @@
+---
+title: "Bioconductor for PCR primers design"
+output: html_notebook
+---
+# PCR primers for the verification of ΔarnB and ΔrseA mutants
+In this notebook I will use the following packages from Bioconductor platform 
+to design PCR primers for the verification of 2 E.coli mutants ΔarnB and ΔrseA 
+```{r}
+library(tidyverse)
+library(biomaRt)
+library(AnnotationHub)
+library(org.EcK12.eg.db)
+library(rentrez)
+library(msa)
+library(Biostrings)
+library(GenomicAlignments)
+library(GenomicFeatures)
+library(BSgenome.Ecoli.NCBI.20080805)
+library(Dict)
+
+```
+Let's start with AnnotationHub which contains annotation information from 
+many different sources
+```{r}
+ah <- AnnotationHub()
+ah
+```
+rdataclass contains information of R object types of the data
+```{r}
+unique(ah$rdataclass)
+```
+OrgDb is a R object with data labeled according to organisms
+```{r}
+orgdb<- ah[ah$rdataclass == "OrgDb",]
+orgdb
+```
+I'm looking for information on E.coli so :
+```{r}
+ecoli<-orgdb[orgdb$species == "Escherichia coli",]
+ecoli
+```
+EcK12 is database on E.coli strain K12, which is what I'm looking for so I will 
+check what kind of information is in this database by calling columns 
+```{r}
+columns(ecoli[["AH95956"]])
+```
+I will "select" for information on rseA and arnB with the following columns:
+```{r}
+select(ecoli[["AH95956"]],keys=c("rseA","arnB"),keytype="SYMBOL",column=c("ACCNUM","ENTREZID","GENENAME","REFSEQ"))
+```
+I want to look for genomic annotation of rseA and arnB which I don't see from
+the above dataframe. So I will use entrez_fetch command to download more details
+```{r}
+rseA <- entrez_fetch(db="gene",id="947053", idtype="acc", rettype="fasta")
+file1<-cat(strwrap(rseA), sep="\n")
+arnB <- entrez_fetch(db="gene",id="947375", idtype="acc", rettype="fasta")
+file2<-cat(strwrap(arnB), sep="\n")
+```
+At this point I need to use BSgenome, which contains complete genome information 
+of a species. I will start with what genomes are available
+```{r}
+available.genomes()
+```
+My genome of interest is BSgenome.Ecoli.NCBI.20080805
+```{r}
+require(BSgenome.Ecoli.NCBI.20080805)
+genome<-BSgenome.Ecoli.NCBI.20080805
+```
+From the information that I pulled using entrez_fetch, I know the RefSeq number 
+for K12 strain is NC_000913 so now I have nucleotide sequence of this strain
+by enter
+```{r}
+rseAgene<-genome[["NC_000913"]][(2708754-1000):(2709404+1000)]
+rseAgene
+arnBgene<-genome[["NC_000913"]][(2365910-1000):(2367067+1000)]
+arnBgene
+```
+The mutant strains that I need to verify are from Keio Collection, which 
+unfortunately, is not in all of these databases. I have to go to Yale E.coli
+genetic stock https://cgsc.biology.yale.edu/ to retrieve primer sequences for 
+each strain. Those are cloning primers, different from my verification primers.
+More information about how the strains were made can be found at 
+doi: 10.1038/msb4100050
+```{r}
+# Retrieve cloning primer sequences for rseA and arnB then convert to DNAString
+
+rseA_p1 <-DNAString("TGACATGGCAAACCAAAGTTGCTTCATTACTGCGATTGCGTTCCTAAAGTATTCCGGGGATCCGTCGACC")
+rseA_p2 <-DNAString("CTTATCAGGCGTTGACGATAGCGGGATACTGGATAAGGGTATTAGGCATGTGTAGGCTGGAGCTGCTTCG")
+arnB_p1 <-DNAString("CGCTCCAAATGGCAAAATATACACAACACTCTTTATAGCAAATATAAGTGATTCCGGGGATCCGTCGACC")
+arnB_p2 <-DNAString("TTCTTAACAGGGTGGATTTCAAACATGGCTTATTGTCCTGCGAGTTGCTGTGTAGGCTGGAGCTGCTTCG")
+
+# Reverse complement the sequences so that I can align them at the same time to genomic sequence
+rev_rseA_p1<-DNAString(reverseComplement(rseA_p1))
+rev_rseA_p2<-DNAString(reverseComplement(rseA_p2))
+rev_arnB_p1<-DNAString(reverseComplement(arnB_p1))
+rev_arnB_p2<-DNAString(reverseComplement(arnB_p2))
+
+# Make a list of all the sequences
+primers<-list(rseA_p1,rev_rseA_p1,rseA_p2,rev_rseA_p2,arnB_p1,rev_arnB_p1,arnB_p2,rev_arnB_p2)
+for (i in (1:length(primers))){
+  print(paste("Matching primer :",i))
+  x<-matchPattern(primers[[i]],genome[["NC_000913"]],max.mismatch=20)
+  print(x)
+}
+```
+
+Based on th results above, I design my verification primers as follows
+```{r}
+rseA_ver_F<-genome[["NC_000913"]][(2706750+100):(2706750+100+17)]
+rseA_ver_R<-reverseComplement(genome[["NC_000913"]][(2707473+100):(2707473+100+17)])
+arnB_ver_F<-genome[["NC_000913"]][(2363870 +100):(2363870 +100+17)]
+arnB_ver_R<-reverseComplement(genome[["NC_000913"]][(2365118 +100):(2365118 +100+17)])
+ver_list<-list(rseA_ver_F,rseA_ver_R,arnB_ver_F,arnB_ver_R)
+
+for (i in (1:length(ver_list))){
+  print(paste("% content of primer #", i))
+  x<-alphabetFrequency(ver_list[[i]],as.prob = TRUE,baseOnly=TRUE)
+  print(x)
+}
+```
+
+The GC content of Primer 2 and 3 is a bit too high, so I will adjust my primers
+```{r}
+rseA_ver_R<-reverseComplement(genome[["NC_000913"]][(2707473+150):(2707473+150+17)])
+arnB_ver_F<-genome[["NC_000913"]][(2363870 +150):(2363870 +150+17)]
+ver_list<-list(rseA_ver_F,rseA_ver_R,arnB_ver_F,arnB_ver_R)
+for (i in (1:length(ver_list))){
+  print(paste("% content of primer #", i))
+  x<-alphabetFrequency(ver_list[[i]],as.prob = TRUE,baseOnly=TRUE)
+  print(x)
+}
+```
+They look Ok to me. So now I will print them out 
+
+```{r}
+order_list<-DNAStringSet(ver_list)
+order_list
+writeXStringSet(order_list,filepath="D:/Documents/OneDrive - Emory University/Dai Le_Dropbox - EC-Phy-Kim Lab/rseA_arnB_ver.fasta" )
+```
+
+
+
+
+
